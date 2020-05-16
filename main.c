@@ -16,11 +16,32 @@ int main(int argc, char* argv[]) {
 
     char* commit_ref = argv[1];
     const char* new_message = argv[2];
-    const char repo_name[] = "test_repo/";
+    char* repo_name;
+    if (argc > 3) {
+        repo_name = argv[3];
+    } else {
+        repo_name = malloc(sizeof("./"));
+        strcpy(repo_name, "./");
+    }
+    int error;
 
     git_libgit2_init();
     git_repository *repo = NULL;
-    int error = git_repository_open(&repo, repo_name);
+    error = git_repository_open(&repo, repo_name);
+    if (error < 0) {
+        HandleError(error);
+    }
+    if (argc == 3) {
+        free(repo_name);
+    }
+
+    git_reference* head_branch_reference;
+    error = git_repository_head(&head_branch_reference, repo);
+    if (error < 0) {
+        HandleError(error);
+    }
+    const char* branch_name;
+    error = git_branch_name(&branch_name, head_branch_reference);
     if (error < 0) {
         HandleError(error);
     }
@@ -45,7 +66,6 @@ int main(int argc, char* argv[]) {
     git_commit_free(commit_to_change);
 
     git_oid new_commit_oid;
-
     git_commit* current_commit;
     git_commit* previous_changed_commit = NULL;
     git_oid previous_commit_oid;
@@ -66,7 +86,7 @@ int main(int argc, char* argv[]) {
                 HandleError(error);
             }
             const git_oid* parent_commit_oid = git_commit_id(parents[i]);
-            
+
             if ((previous_changed_commit != NULL) &&
                 (git_oid_cmp(parent_commit_oid, &previous_commit_oid) == 0)) {
                 git_commit_free(parents[i]);
@@ -116,21 +136,28 @@ int main(int argc, char* argv[]) {
 
     git_revwalk_free(walker);
 
-    git_reference* ref;
-
+    git_reference* new_branch_ref;
     error = git_repository_set_head_detached(repo, &new_commit_oid);
     if (error < 0) {
         HandleError(error);
     }
 
+    error = git_branch_create(&new_branch_ref, repo, branch_name, previous_changed_commit, 1);
+    if (error < 0) {
+        HandleError(error);
+    }
+    git_reference_free(head_branch_reference);
 
-    // Change master!!
-    error = git_branch_create(&ref, repo, "master", previous_changed_commit, 1);
+    error = git_repository_set_head(repo, git_reference_name(new_branch_ref));
+    if (error < 0) {
+        HandleError(error);
+    }
+    error = git_checkout_head(repo, NULL);
     if (error < 0) {
         HandleError(error);
     }
 
-    git_reference_free(ref);
+    git_reference_free(new_branch_ref);
     git_commit_free(previous_changed_commit);
     git_repository_free(repo);
     git_libgit2_shutdown();
