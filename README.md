@@ -1,13 +1,13 @@
-## fast-commit-rename
-Fast git rebase --interactive analog, for renaming commits
+## Fast commit rename
+Fast git rebase -i analog, for renaming commits
 
-# Requirements 
+### Requirements 
 * libgit2 v1.0.0
-# Installation
+### Installation
 ```
 gcc main.c -o git-fast-reword $(pkg-config libgit2)
 ```
-## Usage
+### Usage
 ```
 ./git-fast-reword <commit-ref> <new commit message> [repository adress]
 ```
