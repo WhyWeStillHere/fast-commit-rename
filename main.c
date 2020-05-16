@@ -2,111 +2,136 @@
 #include <string.h>
 #include <git2.h>
 
-void HandleError(const int error) { 
+void HandleError(const int error) {
     const git_error *e = git_error_last();
     printf("Error %d/%d: %s\n", error, e->klass, e->message);
     exit(error);
 }
 
-int main() {
-    git_libgit2_init();
-    git_repository *repo = NULL;
-    int error = git_repository_open(&repo, "test_repo/");
-    if (error < 0) {
-        HandleError(error); 
+int main(int argc, char* argv[]) {
+    if (argc <= 2) {
+        fprintf(stderr,"To few argc");
+        exit(1);
     }
 
-    const char new_message[] = "Redacted name";
+    char* commit_ref = argv[1];
+    const char* new_message = argv[2];
+    const char repo_name[] = "test_repo/";
+
+    git_libgit2_init();
+    git_repository *repo = NULL;
+    int error = git_repository_open(&repo, repo_name);
+    if (error < 0) {
+        HandleError(error);
+    }
 
     git_revwalk *walker;
     error = git_revwalk_new(&walker, repo);
     if (error < 0) {
         HandleError(error);
     }
+
     git_revwalk_sorting(walker, GIT_SORT_REVERSE);
 
-    error = git_revwalk_push_range(walker, "HEAD~20..HEAD");
-    if (error < 0) {
-        HandleError(error);
-    }
+    git_object* commit_object;
+    error = git_revparse_single(&commit_object, repo, commit_ref);
+    git_commit* commit_to_change = (git_commit*)commit_object;
 
-    git_oid oid;
+    git_oid current_commit_oid = *git_commit_id(commit_to_change);
+
+    git_revwalk_hide(walker, &current_commit_oid);
+    git_revwalk_push_head(walker);
+
+    git_commit_free(commit_to_change);
+
     git_oid new_commit_oid;
 
-    git_commit* commit;
-    git_commit* fixed_commit = NULL;
-    const git_oid* par_commit_oid;
-    const git_oid* prev_commit_oid;
-    size_t change_message = 0;
+    git_commit* current_commit;
+    git_commit* previous_changed_commit = NULL;
+    git_oid previous_commit_oid;
+    size_t is_message_changed = 0;
 
-    while (!git_revwalk_next(&oid, walker)) {
-        error = git_commit_lookup(&commit, repo, &oid);
+    do {
+        error = git_commit_lookup(&current_commit, repo, &current_commit_oid);
         if (error < 0) {
             HandleError(error);
         }
 
-        /// MANAGE INIT COMMIT!!!!!
-        int parent_count = git_commit_parentcount(commit);
-        printf("parents: %d\n", parent_count);
+        size_t parent_count = git_commit_parentcount(current_commit);
         git_commit* parents[parent_count];
+
         for (int i = 0; i < parent_count; ++i) {
-            error = git_commit_parent(&parents[i], commit, i);
+            error = git_commit_parent(&parents[i], current_commit, i);
             if (error < 0) {
                 HandleError(error);
             }
-            par_commit_oid = git_commit_id(parents[i]);
-            if ((fixed_commit != NULL) && 
-                (git_oid_cmp(par_commit_oid, prev_commit_oid) == 0)) {
-                parents[i] = fixed_commit;
+            const git_oid* parent_commit_oid = git_commit_id(parents[i]);
+            
+            if ((previous_changed_commit != NULL) &&
+                (git_oid_cmp(parent_commit_oid, &previous_commit_oid) == 0)) {
+                git_commit_free(parents[i]);
+                parents[i] = previous_changed_commit;
             }
         }
-        prev_commit_oid = git_commit_id(commit);
+        previous_commit_oid = current_commit_oid;
 
         git_tree* tree;
-        git_commit_tree(&tree, commit);
+        git_commit_tree(&tree, current_commit);
 
-        const char* message = git_commit_message(commit);
+        const char* message = git_commit_message(current_commit);
 
-        if (change_message == 0) {
-            change_message = 1;
+        if (is_message_changed == 0) {
+            is_message_changed = 1;
             message = new_message;
         }
 
         error = git_commit_create(
-            &new_commit_oid, 
-            repo, 
-            NULL,
-            git_commit_author(commit),
-            git_commit_committer(commit),
-            git_commit_message_encoding(commit),
-            message,
-            tree,
-            parent_count,
-            (const git_commit**)parents // parent
-            );
+                &new_commit_oid,
+                repo,
+                NULL,
+                git_commit_author(current_commit),
+                git_commit_committer(current_commit),
+                git_commit_message_encoding(current_commit),
+                message,
+                tree,
+                parent_count,
+                (const git_commit**)parents
+        );
         if (error < 0) {
             HandleError(error);
         }
-        
-        git_commit_free(fixed_commit);
-        git_commit_free(commit);
 
-        error = git_commit_lookup(&fixed_commit, repo, &new_commit_oid);
-    }
+        git_tree_free(tree);
+
+        //Fixed commit free there
+        for (int i = 0; i < parent_count; ++i) {
+            git_commit_free(parents[i]);
+        }
+
+        git_commit_free(current_commit);
+
+        error = git_commit_lookup(&previous_changed_commit, repo, &new_commit_oid);
+
+    } while (!git_revwalk_next(&current_commit_oid, walker));
 
     git_revwalk_free(walker);
 
     git_reference* ref;
+
     error = git_repository_set_head_detached(repo, &new_commit_oid);
     if (error < 0) {
         HandleError(error);
     }
-    error = git_branch_create(&ref, repo, "master", fixed_commit, 1);
+
+
+    // Change master!!
+    error = git_branch_create(&ref, repo, "master", previous_changed_commit, 1);
     if (error < 0) {
         HandleError(error);
     }
-    git_commit_free(fixed_commit);
-    
+
+    git_reference_free(ref);
+    git_commit_free(previous_changed_commit);
     git_repository_free(repo);
     git_libgit2_shutdown();
 }
